@@ -1,0 +1,10 @@
+# Tested on Python 3.12.10 / Windows 11
+shapely>=2.0
+ezdxf>=1.3
+openpyxl>=3.1
+pywin32>=306
+numpy>=1.26
+pytest>=8
+# GUI: tkinter (bundled with the Windows Python installer)
+pymupdf>=1.24
+pillow>=10
