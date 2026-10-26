@@ -17,7 +17,7 @@ py -3.12 -m venv .venv
 .venv\Scripts\activate
 pip install -r QS_AI_Takeoff\requirements.txt
 cd QS_AI_Takeoff
-python -m pytest tests -q          # 64 tests, no AutoCAD needed
+python -m pytest tests -q          # 74 tests, no AutoCAD needed
 python main.py                     # QS_AI_Takeoff GUI
 python ..\dwg_measure_extractor_v6.py   # V6
 ```
@@ -235,3 +235,22 @@ GUI    -> gui/main_window.py notebook; long jobs run on gui/app_state worker thr
 - File reader still cannot measure surfaces → warning points to Scan current CAD.
 - ZSNUM (in ZSURF.lsp): hyperlink numbers on surfaces (first number = ZLABEL's next number), order Auto (floor → x → y)
   or Selection. GUI row under ZSURF.
+
+## v6.8 — Room outlines: layer you name + room number in Thickness (Data Extraction)
+- `QS_AI_Takeoff/engine/room_output.py` (pure, tested in `tests/test_room_output.py`): layer per room
+  (`single` = the name you type, `per_room` = prefix + room name, unnamed rooms -> prefix + room id),
+  numbering order (`table`, `rows` = top -> bottom / left -> right by row clustering, `name`, `area`).
+- Room Boundaries > *Draw in AutoCAD…* dialog: 1 Layer · 2 Polyline · 3 Properties for Data Extraction
+  (room name -> Material, room number -> **Thickness**) · 4 Scope. DATAEXTRACTION lists the number in its
+  `Thickness` column; Excel (`Rooms` sheet, sorted by number) and CSV carry the same number + CAD layer.
+  Holes (columns inside a room) carry the number of their room.
+- After a draw the app offers *Put these polylines on a layer you name*; the Output panel also has
+  *Move to layer…* and *Number rooms…* for the polylines of the last draw
+  (`services/roomline_cad.move_to_layer`, `set_numbers`).
+- V6 *Floor/Ceiling polylines*: dialog option *Room number -> polyline Thickness* (start number, numbered per
+  drawing in reading order, `fp_number_rooms`); register column `No. (Thickness)`.
+- GUI: palette-icon theme picker (swatches, name in tooltip), Najdi parapet strip under the header,
+  KPI cards + bar charts on Dashboard and Room Boundaries, shared `Dialog` / `Tooltip` / `KpiCard` / `BarChart`
+  in `gui/widgets.py`.
+- **Not yet verified against a live AutoCAD** (no AutoCAD in the build environment): the COM writes of
+  `Thickness` / `Layer` use the same `_put` fallback as `Material`. DXF output is covered by the tests.

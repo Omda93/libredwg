@@ -28,6 +28,8 @@ class Room:
     name: str = ""
     include: bool = True
     named_by: str = ""     # "" | "auto" (text in the drawing) | "user" (typed in the table)
+    number: int | None = None   # outline number written to the polyline THICKNESS (Draw / Export)
+    cad_layer: str = ""         # layer the outline was last drawn / exported on
 
 
 def match_layer(layer, patterns) -> bool:

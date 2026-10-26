@@ -5,7 +5,7 @@ import csv
 import os
 from tkinter import filedialog, messagebox
 
-from gui.roomline_dialog import ask_draw_options
+from gui.roomline_dialog import ask_draw_options, ask_layer, ask_numbering
 from services import roomline_cad as cad
 
 
@@ -26,12 +26,18 @@ class RoomActions:
         except Exception:  # noqa: BLE001
             pass
 
+    def _remember(self, steps):
+        """Store the layer / number each room got, for the table and the Excel / CSV exports."""
+        for r, lay, no in steps:
+            r.cad_layer, r.number = lay, no
+        self._fill_tree()
+
     def draw(self):
         if not self.rooms:
             messagebox.showinfo("Room boundaries", "Press ▶ Detect rooms first.", parent=self)
             return
         cfg = self._cfg()
-        opts = ask_draw_options(self, cfg.get("draw"))
+        opts = ask_draw_options(self, cfg.get("draw"), rooms=[r for r in self.rooms if r.include])
         if not opts:
             return
         cfg["draw"] = opts
@@ -39,29 +45,108 @@ class RoomActions:
         if not rooms:
             messagebox.showinfo("Room boundaries", "No kept rooms to draw - click rooms in the preview to keep them.", parent=self)
             return
-        layer, aci = opts["layer"], opts["aci"]
         u = self.state.project.rules.get("unit_to_m", 0.001)
 
-        def done(handles, err):
+        def done(made, err):
             if err:
                 first = err.splitlines()[0]
                 if messagebox.askyesno("AutoCAD drawing failed",
                                        f"{first}\n\nSave the polylines to a DXF file instead?", parent=self):
                     self.export_dxf(opts)
                 return
-            self.last_handles = handles
+            self.last_draw = made
+            self.last_handles = [m["handle"] for m in made]
+            seen = {}
+            for m in made:
+                seen.setdefault(id(m["room"]), (m["room"], m["layer"], m["number"]))
+            self._remember(seen.values())
+            layers = sorted({m["layer"] for m in made}, key=str.upper)
             area = sum(r.area_m2 for r in rooms)
-            self._log("ROOMS_DRAWN", f"{len(rooms)} rooms, {len(handles)} polylines, layer {layer}")
+            self._log("ROOMS_DRAWN", f"{len(rooms)} rooms, {len(made)} polylines, layer(s) {', '.join(layers[:5])}"
+                                     + (f", numbered from {opts['start']}" if opts["number"] else ""))
             try:
                 self.state.project.save()
             except Exception:  # noqa: BLE001
                 pass
-            messagebox.showinfo("Room boundaries",
-                                f"Drew {len(handles)} closed polylines for {len(rooms)} rooms\n"
-                                f"on layer '{layer}'.  Total area {area:,.2f} m².", parent=self)
+            nums = [m["number"] for m in made if m["number"] is not None]
+            lay_txt = f"layer '{layers[0]}'" if len(layers) == 1 else f"{len(layers)} layers ({layers[0]} …)"
+            msg = (f"Drew {len(made)} closed polylines for {len(rooms)} rooms on {lay_txt}.\n"
+                   f"Total area {area:,.2f} m²."
+                   + (f"\nRoom numbers {min(nums)}-{max(nums)} are in the polyline Thickness "
+                      "(DATAEXTRACTION column 'Thickness')." if nums else "")
+                   + "\n\nPut these polylines on a layer you name now?")
+            if messagebox.askyesno("Room boundaries", msg, parent=self):
+                self.move_last_to_layer()
 
-        if not self.state.run_bg(lambda: cad.draw_com(rooms, layer, aci, opts["width_mm"], u,
-                                                             opts["material"], opts["replace"]), done, "draw rooms in AutoCAD"):
+        if not self.state.run_bg(lambda: cad.draw_com(rooms, opts["layer"], opts["aci"], opts["width_mm"], u,
+                                                      opts["material"], opts["replace"], opts["layer_mode"],
+                                                      opts["prefix"], opts["number"], opts["start"], opts["order"]),
+                                 done, "draw rooms in AutoCAD"):
+            messagebox.showinfo("Room boundaries", "Another task is still running - try again in a moment.",
+                                parent=self)
+
+    def move_last_to_layer(self):
+        """Put the polylines of the last draw on a layer the user names (created when missing)."""
+        made = getattr(self, "last_draw", None) or []
+        if not made:
+            messagebox.showinfo("Room boundaries", "Draw the rooms in AutoCAD first (✎ Draw in AutoCAD…).",
+                                parent=self)
+            return
+        cfg = self._cfg()
+        recent = cfg.setdefault("recent_layers", [])
+        opts = ask_layer(self, len(made), {"layer": recent[0] if recent else "",
+                                           "aci": (cfg.get("draw") or {}).get("aci", 3)}, recent)
+        if not opts:
+            return
+        layer = opts["layer"]
+        cfg["recent_layers"] = [layer] + [x for x in recent if x.upper() != layer.upper()][:9]
+        handles = [m["handle"] for m in made]
+
+        def done(n, err):
+            if err:
+                messagebox.showerror("Move to layer failed", err.splitlines()[0], parent=self)
+                return
+            for m in made:
+                m["layer"] = layer
+            self._remember({id(m["room"]): (m["room"], layer, m["number"]) for m in made}.values())
+            self._log("ROOMS_LAYER", f"{n} polylines moved to layer {layer}")
+            messagebox.showinfo("Room boundaries", f"{n} of {len(handles)} polylines are now on layer '{layer}'.",
+                                parent=self)
+
+        if not self.state.run_bg(lambda: cad.move_to_layer(handles, layer, opts["aci"]), done,
+                                 "move rooms to layer in AutoCAD"):
+            messagebox.showinfo("Room boundaries", "Another task is still running - try again in a moment.",
+                                parent=self)
+
+    def renumber_last(self):
+        """Number (or renumber) the rooms of the last draw - written to the polyline Thickness."""
+        from engine.room_output import numbering
+        made = getattr(self, "last_draw", None) or []
+        if not made:
+            messagebox.showinfo("Room boundaries", "Draw the rooms in AutoCAD first (✎ Draw in AutoCAD…).",
+                                parent=self)
+            return
+        rooms = list({id(m["room"]): m["room"] for m in made}.values())
+        d = self._cfg().get("draw") or {}
+        opts = ask_numbering(self, len(rooms), {"start": d.get("start", 1), "order": d.get("order", "rows")})
+        if not opts:
+            return
+        nums = numbering(rooms, opts["start"], opts["order"])
+        todo = {m["handle"]: nums[id(m["room"])] for m in made}
+
+        def done(n, err):
+            if err:
+                messagebox.showerror("Numbering failed", err.splitlines()[0], parent=self)
+                return
+            for m in made:
+                m["number"] = nums[id(m["room"])]
+            self._remember((r, r.cad_layer, nums[id(r)]) for r in rooms)
+            self._cfg().setdefault("draw", {}).update(number=True, **opts)
+            self._log("ROOMS_NUMBERED", f"{n} polylines numbered from {opts['start']} ({opts['order']})")
+            messagebox.showinfo("Room boundaries", f"{n} polylines numbered {min(nums.values())}-"
+                                f"{max(nums.values())} (Thickness).", parent=self)
+
+        if not self.state.run_bg(lambda: cad.set_numbers(todo), done, "number rooms in AutoCAD"):
             messagebox.showinfo("Room boundaries", "Another task is still running - try again in a moment.",
                                 parent=self)
 
@@ -74,7 +159,7 @@ class RoomActions:
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("Undo failed", str(e), parent=self)
             return
-        self.last_handles = []
+        self.last_handles, self.last_draw = [], []
         self._log("ROOMS_UNDONE", f"{n} polylines erased")
         messagebox.showinfo("Room boundaries", f"Erased {n} polylines.", parent=self)
 
@@ -82,7 +167,8 @@ class RoomActions:
         if not self.rooms:
             messagebox.showinfo("Room boundaries", "Press ▶ Detect rooms first.", parent=self)
             return
-        opts = opts or ask_draw_options(self, self._cfg().get("draw"), title="Export room boundaries (DXF)")
+        opts = opts or ask_draw_options(self, self._cfg().get("draw"), title="Export room boundaries (DXF)",
+                                        rooms=[r for r in self.rooms if r.include], action="Export")
         if not opts:
             return
         self._cfg()["draw"] = opts
@@ -91,9 +177,12 @@ class RoomActions:
         if not p:
             return
         rooms = self._target(opts.get("scope", "included"))
-        cad.export_dxf(rooms, p, opts["layer"], opts["aci"], opts["width_mm"],
-                       self.state.project.rules.get("unit_to_m", 0.001),
-                       self.state.project.rules.get("insunits_expected"), opts["material"])
+        steps = cad.export_dxf(rooms, p, opts["layer"], opts["aci"], opts["width_mm"],
+                               self.state.project.rules.get("unit_to_m", 0.001),
+                               self.state.project.rules.get("insunits_expected"), opts["material"],
+                               opts.get("layer_mode", "single"), opts.get("prefix", ""), opts.get("number", False),
+                               opts.get("start", 1), opts.get("order", "table"))
+        self._remember(steps)
         self._log("ROOMS_DXF", p)
         messagebox.showinfo("Room boundaries", f"Saved {len(rooms)} rooms to\n{p}\n\n"
                             "In AutoCAD: INSERT (or open + copy/paste with base point 0,0).", parent=self)
@@ -138,11 +227,12 @@ class RoomActions:
             return
         with open(p, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
-            w.writerow(["room_id", "name", "name_source", "area_m2", "perimeter_m", "status", "holes", "vertices",
-                        "cx", "cy"])
+            w.writerow(["room_id", "no_thickness", "name", "name_source", "cad_layer", "area_m2", "perimeter_m",
+                        "status", "holes", "vertices", "cx", "cy"])
             for r in self.rooms:
                 c = r.poly.centroid
-                w.writerow([r.rid, r.name, r.named_by or "", r.area_m2, r.perim_m,
+                w.writerow([r.rid, "" if r.number is None else r.number, r.name, r.named_by or "", r.cad_layer,
+                            r.area_m2, r.perim_m,
                             "KEPT" if r.include else "DROPPED",
                             len(r.poly.interiors), len(r.poly.exterior.coords) - 1, round(c.x, 3), round(c.y, 3)])
         messagebox.showinfo("Room boundaries", f"Saved {p}", parent=self)

@@ -7779,8 +7779,34 @@ def _fp_material(name):
     return "" if s in ("", "(unnamed)") else s
 
 
+def fp_number_rooms(rooms, start):
+    """Room numbers in reading order (rows top -> bottom, left -> right in a row) -> r["no"].
+    The number is written to the polyline THICKNESS, which AutoCAD DATAEXTRACTION lists as 'Thickness'.
+    A room joins the current row when its inner point lies inside the vertical extent of the row's first room."""
+    pts = []
+    for r in rooms:
+        try:
+            pg = Polygon(r["poly"], r.get("holes") or [])
+            p = pg.representative_point()
+            pts.append((r, p.x, p.y, pg.bounds[1], pg.bounds[3]))
+        except Exception:
+            xs, ys = [q[0] for q in r["poly"]], [q[1] for q in r["poly"]]
+            pts.append((r, sum(xs) / len(xs), sum(ys) / len(ys), min(ys), max(ys)))
+    todo = sorted(pts, key=lambda t: (-t[2], t[1]))
+    no = int(start)
+    while todo:
+        lo, hi = todo[0][3], todo[0][4]
+        row = [t for t in todo if lo <= t[2] <= hi]
+        todo = [t for t in todo if not lo <= t[2] <= hi]
+        for t in sorted(row, key=lambda t: t[1]):
+            t[0]["no"] = no
+            no += 1
+    return rooms
+
+
 def fp_write_dxf(doc, rooms, layer, width_mm, f, rgb, replace, material=True):
-    """Draw the polylines into an ezdxf document: global WIDTH in mm (not a lineweight), room name as Material."""
+    """Draw the polylines into an ezdxf document: global WIDTH in mm (not a lineweight), room name as Material,
+    room number r["no"] (when set) as THICKNESS."""
     from ezdxf.colors import rgb2int
     width = float(width_mm or 0) / 1000.0 / float(f or 0.001)
     if layer not in doc.layers:
@@ -7808,6 +7834,8 @@ def fp_write_dxf(doc, rooms, layer, width_mm, f, rgb, replace, material=True):
                     mats[m] = None
             if mats[m] is not None:
                 attrs["material_handle"] = mats[m].dxf.handle
+        if r.get("no") is not None:
+            attrs["thickness"] = float(r["no"])
         for ring in [r["poly"]] + list(r.get("holes", [])):
             msp.add_lwpolyline(ring, close=True, dxfattribs=attrs)
     return len(rooms)
@@ -7891,6 +7919,11 @@ def fp_write_com(path, rooms, layer, width_mm, f, rgb, replace, save, material=T
                 if m in made_mats:
                     try:
                         pl.Material = m
+                    except Exception:
+                        pass
+                if r.get("no") is not None:
+                    try:
+                        pl.Thickness = float(r["no"])
                     except Exception:
                         pass
             made += 1
@@ -11227,6 +11260,8 @@ class App(tk.Tk):
         self.v_fp_color = V("fp_color", "#FF0000")
         self.v_fp_width = V("fp_width", "20")                 # polyline global width (mm) - not a lineweight
         self.v_fp_material = V("fp_material", True, tk.BooleanVar)
+        self.v_fp_number = V("fp_number", True, tk.BooleanVar)          # room number -> polyline Thickness
+        self.v_fp_start = V("fp_number_start", "1")
         self.v_wr_mode = V("wr_mode", "rooms")
         self.v_rattr = V("room_attr_tag", "")
         self.v_tlayers = V("text_layers", "*")
@@ -14443,6 +14478,15 @@ class App(tk.Tk):
 
         ttk.Checkbutton(frm, text="Room name → polyline Material", variable=v_mat).grid(
             row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        v_num = tk.BooleanVar(value=self.v_fp_number.get())
+        v_start = tk.StringVar(value=self.v_fp_start.get())
+        nf = ttk.Frame(frm)
+        nf.grid(row=4, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        ttk.Checkbutton(nf, text="Room number → polyline Thickness   start at", variable=v_num).pack(side="left")
+        ttk.Spinbox(nf, from_=0, to=999999, textvariable=v_start, width=7).pack(side="left", padx=(4, 0))
+        ttk.Label(frm, text="Numbered top → bottom, left → right in each drawing. AutoCAD DATAEXTRACTION lists the "
+                            "number in its 'Thickness' column; the Excel register shows the same number.",
+                  style="Sub.TLabel", wraplength=420, justify="left").grid(row=5, column=0, columnspan=3, sticky="w")
 
         def ok():
             name = v_layer.get().strip()
@@ -14456,10 +14500,16 @@ class App(tk.Tk):
             except ValueError:
                 messagebox.showwarning(APP_NAME, "Polyline width must be a number (mm, 0 or more).", parent=dlg)
                 return
-            res.update(layer=name, lw="%g" % lw, color=v_col.get(), material=v_mat.get())
+            try:
+                start = int(v_start.get() or 1)
+            except ValueError:
+                messagebox.showwarning(APP_NAME, "The start number must be a whole number.", parent=dlg)
+                return
+            res.update(layer=name, lw="%g" % lw, color=v_col.get(), material=v_mat.get(), number=v_num.get(),
+                       start=start)
             dlg.destroy()
         bf = ttk.Frame(frm)
-        bf.grid(row=4, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        bf.grid(row=6, column=0, columnspan=3, sticky="e", pady=(12, 0))
         ttk.Button(bf, text="Run", command=ok).pack(side="left", padx=4)
         ttk.Button(bf, text="Cancel", command=dlg.destroy).pack(side="left")
         dlg.bind("<Return>", lambda _e: ok())
@@ -14472,7 +14522,9 @@ class App(tk.Tk):
         self.v_fp_width.set(res["lw"])
         self.v_fp_color.set(res["color"])
         self.v_fp_material.set(res["material"])
-        return res["layer"], res["lw"], res["color"], res["material"]
+        self.v_fp_number.set(res["number"])
+        self.v_fp_start.set(str(res["start"]))
+        return res["layer"], res["lw"], res["color"], res["material"], (res["start"] if res["number"] else None)
 
     def _wr_mode(self):
         m = self.v_wr_mode.get()
@@ -14567,7 +14619,7 @@ class App(tk.Tk):
         style = self._floorpoly_dialog()
         if not style:
             return
-        layer, lw, color, material = style
+        layer, lw, color, material, start_no = style
         rgb = _fp_rgb(color)
         eng = qs_room_engine(self._qs_pp_dir())
         try:
@@ -14601,6 +14653,8 @@ class App(tk.Tk):
                         self.q.put(("tool_prog", k, ("floorpoly", path, "no rooms detected - check the wall layers",
                                                      len(files), None)))
                         continue
+                    if start_no is not None:                  # each drawing is numbered from the start number
+                        fp_number_rooms(rooms, start_no)
                     if path.lower().endswith(".dxf"):
                         base, ext = os.path.splitext(path)
                         target = base + "_POLY" + ext
@@ -14739,13 +14793,15 @@ class App(tk.Tk):
                     len(data), fmt_num(sum(r["area"] for r in data)), sum(q for *_x, q in lrows),
                     os.path.basename(path)))
             elif tool == "floorpoly":
-                hdr = ["Subfolder", "Drawing", "Room", "Area (m²)", "Perimeter (m)", "Layer", "Output file"]
-                rows = [(r["subfolder"], r["drawing"], r["name"], r["area"], r["perimeter"], r["layer"], r["target"])
-                        for r in data]
-                fm = [None, None, None, "#,##0.00", "#,##0.00", None, None]
+                hdr = ["Subfolder", "Drawing", "No. (Thickness)", "Room", "Area (m²)", "Perimeter (m)", "Layer",
+                       "Output file"]
+                rows = [(r["subfolder"], r["drawing"], r.get("no"), r["name"], r["area"], r["perimeter"], r["layer"],
+                         r["target"]) for r in sorted(data, key=lambda r: (r["subfolder"], r["drawing"],
+                                                                            r.get("no") is None, r.get("no") or 0))]
+                fm = [None, None, "0", None, "#,##0.00", "#,##0.00", None, None]
                 table.set(hdr[1:], [r[1:] for r in rows], fm[1:])
                 path = os.path.join(out_dir, "Floor_Ceiling_Polylines_%s.xlsx" % ts)
-                write_simple_workbook(path, [("Rooms", hdr, rows, fm, [3, 4])])
+                write_simple_workbook(path, [("Rooms", hdr, rows, fm, [4, 5])])
                 info.configure(text="%d polylines  ·  %s m²  ·  %s" % (
                     len(data), fmt_num(sum(r["area"] for r in data)), os.path.basename(path)))
             elif tool == "text":

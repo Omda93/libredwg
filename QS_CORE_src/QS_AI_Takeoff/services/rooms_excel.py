@@ -1,6 +1,7 @@
 """Floor & ceiling takeoff workbook from the Room Boundaries result (kept rooms).
 
-Sheets: Rooms (one row per room, totals with formulas), By Room Name (grouped), Dropped (left out, for audit).
+Sheets: Rooms (one row per room, totals with formulas; ordered by the room number written to the polyline
+Thickness when the rooms were numbered, so it lines up with AutoCAD DATAEXTRACTION), By Room Name (grouped), Dropped (left out, for audit).
 Professional styling, no signature in the file.
 """
 from __future__ import annotations
@@ -53,17 +54,20 @@ def _sheet(ws, title, headers, rows, fmts, widths, total_cols=()):
 
 
 def write_rooms_xlsx(path, rooms, drawing="", project=""):
-    """rooms: engine Room objects (rid, name, area_m2, perim_m, include, poly)."""
+    """rooms: engine Room objects (rid, name, area_m2, perim_m, include, poly, number, cad_layer)."""
     kept = [r for r in rooms if r.include]
     dropped = [r for r in rooms if not r.include]
     wb = Workbook()
-    rows = [(r.rid, r.name or "", round(r.area_m2, 3), round(r.area_m2, 3), round(r.perim_m, 3),
-             len(r.poly.interiors), r.named_by or "") for r in kept]
+    if any(getattr(r, "number", None) is not None for r in kept):     # same order as DATAEXTRACTION by Thickness
+        kept = sorted(kept, key=lambda r: (r.number is None, r.number or 0))
+    rows = [(r.rid, getattr(r, "number", None), r.name or "", round(r.area_m2, 3), round(r.area_m2, 3),
+             round(r.perim_m, 3), len(r.poly.interiors), getattr(r, "cad_layer", "") or "", r.named_by or "")
+            for r in kept]
     _sheet(wb.active, "Rooms",
-           ["Room ID", "Room Name", "Floor Area (m²)", "Ceiling Area (m²)", "Perimeter / Skirting (m)",
-            "Columns Inside", "Name Source"],
-           rows, [None, None, "#,##0.00", "#,##0.00", "#,##0.00", "0", None], [10, 30, 16, 16, 20, 12, 12],
-           total_cols=(3, 4, 5))
+           ["Room ID", "No. (Polyline Thickness)", "Room Name", "Floor Area (m²)", "Ceiling Area (m²)",
+            "Perimeter / Skirting (m)", "Columns Inside", "CAD Layer", "Name Source"],
+           rows, [None, "0", None, "#,##0.00", "#,##0.00", "#,##0.00", "0", None, None],
+           [10, 14, 30, 16, 16, 20, 12, 22, 12], total_cols=(4, 5, 6))
     grp = {}
     for r in kept:
         g = grp.setdefault(r.name or "(no name)", [0, 0.0, 0.0])

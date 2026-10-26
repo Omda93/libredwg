@@ -42,7 +42,7 @@ MODES = [("select", "🖱 Select", "Click a room to select it, or DRAG a window:
 class RoomlineTab(RoomActions, ttk.Frame):
     def __init__(self, master, state, scan_cb=None, dxf_cb=None, area_cb=None, *args, **kw):
         ttk.Frame.__init__(self, master, padding=8)
-        self.state, self.rooms, self.info, self.last_handles = state, [], {}, []
+        self.state, self.rooms, self.info, self.last_handles, self.last_draw = state, [], {}, [], []
         self.scan_cb, self.dxf_cb, self.area_cb = scan_cb, dxf_cb, area_cb
         self._layer_names, self._counts, self._all_layers, self._chosen = [], {}, [], set()
         self._busy = False
@@ -172,28 +172,39 @@ class RoomlineTab(RoomActions, ttk.Frame):
         # --------------------------------------------------------------- right
         right = ttk.Frame(self)
         right.grid(row=1, column=2, sticky="ns", padx=(8, 0))
-        cols = ("id", "name", "area", "perim", "status")
-        self.tree = ttk.Treeview(right, columns=cols, show="headings", height=18, selectmode="extended")
-        for c, t, w in zip(cols, ("ID", "Name", "Area m²", "Perim. m", "Status"), (50, 96, 72, 72, 74)):
-            self.tree.heading(c, text=t)
-            self.tree.column(c, width=w, anchor="e" if c in ("area", "perim") else "w", stretch=False)
+        kpi = ttk.Frame(right)
+        kpi.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        from gui.widgets import KpiCard
+        self.kpi = {k: KpiCard(kpi, t, tone) for k, t, tone in (("kept", "Rooms kept", "accent"),
+                                                                ("area", "Floor area m²", "ok"),
+                                                                ("perim", "Perimeter m", "accent2"))}
+        for i, w in enumerate(self.kpi.values()):
+            w.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 4, 0))
+            kpi.columnconfigure(i, weight=1)
+        cols = ("no", "id", "name", "area", "perim", "layer", "status")
+        self.tree = ttk.Treeview(right, columns=cols, show="headings", height=16, selectmode="extended")
+        self._sort = ("", False)
+        for c, t, w in zip(cols, ("No.", "ID", "Name", "Area m²", "Perim. m", "CAD layer", "Status"),
+                           (44, 46, 110, 70, 70, 96, 64)):
+            self.tree.heading(c, text=t, command=lambda c=c: self._sort_by(c))
+            self.tree.column(c, width=w, anchor="e" if c in ("no", "area", "perim") else "w", stretch=False)
         tsb = ttk.Scrollbar(right, command=self.tree.yview)
         self.tree.configure(yscrollcommand=tsb.set)
-        self.tree.grid(row=0, column=0, sticky="ns")
-        tsb.grid(row=0, column=1, sticky="ns")
-        right.rowconfigure(0, weight=1)
+        self.tree.grid(row=1, column=0, sticky="ns")
+        tsb.grid(row=1, column=1, sticky="ns")
+        right.rowconfigure(1, weight=1)
         theme.on_change(lambda c: self.tree.tag_configure("off", foreground=c["muted"]))
         self.tree.bind("<<TreeviewSelect>>", self._tree_sel)
         self.tree.bind("<Double-1>", lambda e: self.rename())
         bf = ttk.Frame(right)
-        bf.grid(row=1, column=0, columnspan=2, sticky="w", pady=4)
+        bf.grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
         for t, cmd in (("Keep", lambda: self.set_include(True)), ("Drop", lambda: self.set_include(False)),
                        ("Rename", self.rename), ("Zoom", self.zoom_sel)):
             ttk.Button(bf, text=t, command=cmd, width=7).pack(side="left", padx=1)
         self.total = ttk.Label(right, text="", style="Sub.TLabel", wraplength=360, justify="left")
-        self.total.grid(row=2, column=0, columnspan=2, sticky="w")
+        self.total.grid(row=3, column=0, columnspan=2, sticky="w")
         out = ttk.LabelFrame(right, text="5  Output (kept rooms only)", style="Step.TLabelframe", padding=6)
-        out.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        out.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Button(out, text="✎  Draw in AutoCAD…", style="Accent.TButton", command=self.draw).grid(
             row=0, column=0, columnspan=2, sticky="ew")
         ttk.Button(out, text="Undo last draw", command=self.undo_draw).grid(row=1, column=0, sticky="ew", pady=(4, 0))
@@ -202,6 +213,16 @@ class RoomlineTab(RoomActions, ttk.Frame):
         ttk.Button(out, text="Export CSV…", command=self.export_csv).grid(row=2, column=0, sticky="ew", pady=(4, 0))
         ttk.Button(out, text="📊 Export Excel…", command=self.export_xlsx).grid(row=2, column=1, sticky="ew",
                                                                               pady=(4, 0), padx=(4, 0))
+        ttk.Separator(out).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 2))
+        ttk.Label(out, text="After drawing", style="Sub.TLabel").grid(row=4, column=0, columnspan=2, sticky="w")
+        b_lay = ttk.Button(out, text="⇢  Move to layer…", command=self.move_last_to_layer)
+        b_lay.grid(row=5, column=0, sticky="ew", pady=(2, 0))
+        b_num = ttk.Button(out, text="#  Number rooms…", command=self.renumber_last)
+        b_num.grid(row=5, column=1, sticky="ew", pady=(2, 0), padx=(4, 0))
+        from gui.widgets import Tooltip
+        Tooltip(b_lay, "Put the polylines of the last draw on a layer you name (created when missing).")
+        Tooltip(b_num, "Write a room number to the Thickness of each polyline of the last draw - AutoCAD "
+                       "DATAEXTRACTION lists it in the 'Thickness' column.")
         out.columnconfigure(0, weight=1)
         out.columnconfigure(1, weight=1)
         self.columnconfigure(1, weight=1)
@@ -404,7 +425,8 @@ class RoomlineTab(RoomActions, ttk.Frame):
         ed = self._edits()
         manual, removed, hidden = list(ed["manual"]), list(ed["removed"]), list(ed["hidden"])
         u = self.state.project.rules.get("unit_to_m", 0.001)
-        old = [(r.poly.representative_point(), r.name, r.include, r.named_by) for r in self.rooms]
+        old = [(r.poly.representative_point(), r.name, r.include, r.named_by, r.number, r.cad_layer)
+               for r in self.rooms]
         self.btn_detect.configure(state="disabled")
         self.msg.configure(text="Detecting rooms…", foreground=theme.msg_color("warn"))
         self._busy = True
@@ -416,9 +438,9 @@ class RoomlineTab(RoomActions, ttk.Frame):
             segs = [(float(l["x1"]), float(l["y1"]), float(l["x2"]), float(l["y2"]))
                     for l in lines if not l.get("chord") and match_layer(l.get("layer"), layers)]
             for r in rooms:                       # keep names / keep-drop choices of the previous run
-                for pt, name, inc, by in old:
+                for pt, name, inc, by, no, lay in old:
                     if r.poly.contains(pt):
-                        r.name, r.include, r.named_by = name, inc, by
+                        r.name, r.include, r.named_by, r.number, r.cad_layer = name, inc, by, no, lay
                         break
             return rooms, info, segs
 
@@ -540,18 +562,36 @@ class RoomlineTab(RoomActions, ttk.Frame):
     def _fill_tree(self):
         sel = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
-        for k, r in enumerate(self.rooms):
+        order = list(range(len(self.rooms)))
+        col, rev = self._sort
+        if col:
+            keys = {"no": lambda r: (r.number is None, r.number or 0), "id": lambda r: r.rid,
+                    "name": lambda r: (r.name or "").lower(), "area": lambda r: r.area_m2,
+                    "perim": lambda r: r.perim_m, "layer": lambda r: r.cad_layer.lower(),
+                    "status": lambda r: not r.include}
+            order.sort(key=lambda k: keys[col](self.rooms[k]), reverse=rev)
+        for k in order:
+            r = self.rooms[k]
             self.tree.insert("", "end", iid=str(k), tags=() if r.include else ("off",),
-                             values=(r.rid, r.name, f"{r.area_m2:,.2f}", f"{r.perim_m:,.2f}",
-                                     "Kept" if r.include else "Dropped"))
+                             values=("" if r.number is None else r.number, r.rid, r.name, f"{r.area_m2:,.2f}",
+                                     f"{r.perim_m:,.2f}", r.cad_layer, "Kept" if r.include else "Dropped"))
         keep = [s for s in sel if self.tree.exists(s)]
         if keep:
             self.tree.selection_set(keep)
         inc = [r for r in self.rooms if r.include]
-        self.total.configure(text=f"Kept {len(inc)} / {len(self.rooms)} rooms\n"
-                                  f"Floor area  {sum(r.area_m2 for r in inc):,.2f} m²   ·   "
-                                  f"perimeter  {sum(r.perim_m for r in inc):,.2f} m")
+        area, perim = sum(r.area_m2 for r in inc), sum(r.perim_m for r in inc)
+        self.total.configure(text=f"{len(self.rooms) - len(inc)} dropped  ·  "
+                                  f"{sum(1 for r in inc if r.number is not None)} numbered  ·  "
+                                  f"{sum(1 for r in inc if not r.name)} without a name")
+        self.kpi["kept"].set(f"{len(inc)} / {len(self.rooms)}")
+        self.kpi["area"].set(f"{area:,.2f}")
+        self.kpi["perim"].set(f"{perim:,.2f}")
         self.canvas.redraw()
+
+    def _sort_by(self, col):
+        c, rev = self._sort
+        self._sort = (col, not rev if c == col else False)
+        self._fill_tree()
 
     def _selected(self):
         return [int(i) for i in self.tree.selection()]

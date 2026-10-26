@@ -90,16 +90,19 @@ class MainWindow(tk.Tk):
         self.head_sub.pack(side="left", pady=(16, 10))
         box = tk.Frame(self.head)
         box.pack(side="right", padx=14)
-        self.head_lbl = tk.Label(box, text="Theme")
-        self.head_lbl.pack(side="left", padx=(0, 6))
-        self.theme_var = tk.StringVar(value=theme.NAME)
-        cb = ttk.Combobox(box, textvariable=self.theme_var, values=list(theme.THEMES), width=16, state="readonly")
-        cb.pack(side="left")
-        cb.bind("<<ComboboxSelected>>", self._switch_theme)
+        self.btn_theme = tk.Label(box, text="🎨", cursor="hand2", padx=8, pady=2)
+        self.btn_theme.pack(side="left")
+        self.btn_theme.bind("<Button-1>", lambda e: self._theme_menu())
+        from gui.widgets import Tooltip
+        Tooltip(self.btn_theme, "Appearance - choose a colour theme (applied instantly, remembered).")
         self.head_box = box
         self.btn_prefs = ttk.Button(self.head, text="💾  Save preferences", style="Accent.TButton",
                                     command=self.save_prefs)
         self.btn_prefs.pack(side="right", padx=(4, 10))
+        self.theme_var = tk.StringVar(value=theme.NAME)
+        self.head_strip = tk.Canvas(self, height=3, highlightthickness=0, bd=0)
+        self.head_strip.pack(fill="x")
+        self.head_strip.bind("<Configure>", lambda e: theme.C and self._paint_strip(theme.C))
         theme.on_change(self._paint_header)
 
     def _paint_header(self, c):
@@ -109,7 +112,69 @@ class MainWindow(tk.Tk):
         self.head_logo.configure(bg=c["head"])
         theme.draw_logo(self.head_logo, 4, 4, 32, c["accent2"] if c["accent"].lower() == c["head"].lower() else c["accent"])
         self.head_sub.configure(bg=c["head"], fg=c["head_muted"], font=(c["font"], 9))
-        self.head_lbl.configure(bg=c["head"], fg=c["head_muted"], font=(c["font"], 9))
+        self.btn_theme.configure(bg=c["head"], fg=c["head_fg"], font=(c["font"], 14),
+                                 activebackground=c["head"])
+        self._paint_strip(c)
+
+    def _paint_strip(self, c):
+        """Thin band under the header: accent line, Najdi crenellation pattern for the Najdi theme."""
+        cv = self.head_strip
+        cv.delete("all")
+        w = max(cv.winfo_width(), self.winfo_width(), 1400)
+        cv.configure(bg=c["bg"])
+        if theme.NAME == "Najdi":
+            cv.configure(height=10)
+            cv.create_rectangle(0, 0, w, 3, fill=c["head"], outline="")
+            step = 14
+            for x in range(0, w + step, step):          # stepped triangles of Najdi parapets
+                cv.create_polygon(x, 3, x + step / 2, 10, x + step, 3, fill=c["accent2"], outline="")
+                cv.create_rectangle(x + step / 2 - 1, 3, x + step / 2 + 1, 6, fill=c["accent"], outline="")
+        else:
+            cv.configure(height=3)
+            cv.create_rectangle(0, 0, w * .62, 3, fill=c["accent"], outline="")
+            cv.create_rectangle(w * .62, 0, w, 3, fill=c["accent2"], outline="")
+
+    def _theme_menu(self):
+        """Visual theme picker: one swatch card per theme (colours only, name as tooltip)."""
+        old = getattr(self, "_theme_pop", None)
+        if old is not None and old.winfo_exists():
+            old.destroy()
+            return
+        from gui.widgets import Tooltip
+        c = theme.C
+        pop = self._theme_pop = tk.Toplevel(self)
+        pop.wm_overrideredirect(True)
+        pop.configure(bg=c["border"])
+        inner = tk.Frame(pop, bg=c["panel"], padx=10, pady=10)
+        inner.pack(padx=1, pady=1)
+        for i, (name, p) in enumerate(theme.THEMES.items()):
+            sel = name == theme.NAME
+            card = tk.Canvas(inner, width=74, height=52, highlightthickness=2, bd=0, cursor="hand2",
+                             bg=p["bg"], highlightbackground=c["accent"] if sel else c["panel"])
+            card.grid(row=i // 3, column=i % 3, padx=4, pady=4)
+            card.create_rectangle(0, 0, 80, 14, fill=p["head"], outline="")
+            card.create_rectangle(6, 20, 50, 30, fill=p["card"], outline=p["border"])
+            card.create_rectangle(6, 36, 34, 46, fill=p["accent"], outline="")
+            card.create_rectangle(38, 36, 58, 46, fill=p["accent2"], outline="")
+            card.create_oval(60, 3, 68, 11, fill=p["accent"], outline="")
+            if sel:
+                card.create_text(66, 26, text="✓", fill=p["accent"], font=(c["font"], 11, "bold"))
+            card.bind("<Button-1>", lambda e, n=name: self._pick_theme(n))
+            Tooltip(card, name)
+        pop.update_idletasks()
+        x = self.btn_theme.winfo_rootx() + self.btn_theme.winfo_width() - pop.winfo_reqwidth()
+        y = self.btn_theme.winfo_rooty() + self.btn_theme.winfo_height() + 6
+        pop.wm_geometry(f"+{max(0, x)}+{y}")
+        pop.bind("<Escape>", lambda e: pop.destroy())
+        pop.bind("<FocusOut>", lambda e: pop.after(150, lambda: pop.winfo_exists() and pop.destroy()))
+        pop.focus_force()
+
+    def _pick_theme(self, name):
+        pop = getattr(self, "_theme_pop", None)
+        if pop is not None and pop.winfo_exists():
+            pop.destroy()
+        self.theme_var.set(name)
+        self._switch_theme()
 
     # ------------------------------------------------------------ AutoCAD + this window on one screen
     def _arrange_with_cad(self):
