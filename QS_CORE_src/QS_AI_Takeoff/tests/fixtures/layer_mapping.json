@@ -1,0 +1,64 @@
+{
+  "wall_layers": [
+    "*WALL*"
+  ],
+  "expand_blocks": true,
+  "external_layers": [
+    "*EXT*",
+    "*EXTERNAL*"
+  ],
+  "internal_layers": [
+    "*INT*",
+    "*WALL*",
+    "*PART*"
+  ],
+  "openings": {
+    "door_patterns": [
+      "DOOR",
+      "DR_",
+      "D-"
+    ],
+    "window_patterns": [
+      "WIN",
+      "WD_",
+      "W-"
+    ],
+    "width_attrs": [
+      "WIDTH",
+      "W",
+      "WD"
+    ],
+    "height_attrs": [
+      "HEIGHT",
+      "H",
+      "HT"
+    ],
+    "sill_attrs": [
+      "SILL",
+      "SILL_HEIGHT",
+      "SH"
+    ],
+    "attr_unit_to_m": 0.001
+  },
+  "opening_schedule": {},
+  "generated_layers": {
+    "QS_WALL_CANDIDATES": {
+      "color": 4
+    },
+    "QS_PLASTER_GROSS": {
+      "color": 3
+    },
+    "QS_PAINT_GROSS": {
+      "color": 5
+    },
+    "QS_OPENINGS": {
+      "color": 6
+    },
+    "QS_REVIEW_REQUIRED": {
+      "color": 1
+    },
+    "QS_APPROVED": {
+      "color": 2
+    }
+  }
+}

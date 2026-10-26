@@ -1,0 +1,25 @@
+;;; QS_EXPORT - export application-generated geometry (QS_TAKEOFF XData) with ids and layers to CSV.
+;;; Lets the app reconcile what is actually in the drawing with its records. Read-only.
+(vl-load-com)
+
+(defun c:QS_EXPORT (/ ss i ent ed xd id path f obj len area typ)
+  (if (not (tblsearch "APPID" "QS_TAKEOFF")) (regapp "QS_TAKEOFF"))
+  (setq ss (ssget "_X" '((-3 ("QS_TAKEOFF")))))
+  (if (null ss) (progn (prompt "\nNo QS generated entities to export.") (princ))
+    (progn
+      (setq path (strcat (getvar "DWGPREFIX") (vl-filename-base (getvar "DWGNAME")) "_qs_generated.csv"))
+      (setq f (open path "w") i 0)
+      (write-line "id,handle,type,layer,length,area" f)
+      (repeat (sslength ss)
+        (setq ent (ssname ss i) ed (entget ent '("QS_TAKEOFF")) typ (cdr (assoc 0 ed)))
+        (setq xd (cdr (assoc -3 ed)) id (cdr (cadr (car xd))))
+        (setq obj (vlax-ename->vla-object ent))
+        (setq len (if (vlax-property-available-p obj 'Length) (vla-get-length obj) 0.0))
+        (setq area (if (vlax-property-available-p obj 'Area) (vla-get-area obj) 0.0))
+        (write-line (strcat id "," (cdr (assoc 5 ed)) "," typ "," (cdr (assoc 8 ed)) "," (rtos len 2 4) "," (rtos area 2 4)) f)
+        (setq i (1+ i)))
+      (close f)
+      (prompt (strcat "\nQS_EXPORT: " (itoa (sslength ss)) " entities -> " path))
+      (princ))))
+(princ "\nQS_EXPORT loaded.")
+(princ)

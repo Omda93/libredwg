@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+QS_AI_Takeoff/output/*
+QS_AI_Takeoff/logs/*
+QS_AI_Takeoff/dist/
+!QS_AI_Takeoff/output/.keep
+!QS_AI_Takeoff/logs/.keep
+*.xlsx
+*.pkl
+*_qs_scan.json
+*.qs_backup_*
+*.bak
